@@ -338,3 +338,108 @@ fn run_mp3_opus_chain(
     Ok(metrics_list)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::generate_synthetic_test_signal;
+
+    #[test]
+    fn test_end_to_end_smoke_2_iterations() {
+        if verify_ffmpeg_installed().is_err() {
+            eprintln!("Skipping end-to-end smoke test because ffmpeg is unavailable on PATH.");
+            return;
+        }
+
+        let reference = generate_synthetic_test_signal(1.5, 48_000);
+        let config = TranscodeConfig {
+            chain: ChainSelection::Both,
+            iterations: 2,
+            mp3_kbps: 192,
+            opus_kbps: 128,
+            max_lag_frames: 2048,
+            keep_temp: None,
+            source_label: "synthetic_48k.wav".to_string(),
+        };
+
+        let results = run_benchmark_chains(None, &reference, &config)
+            .expect("End-to-end transcode benchmark should succeed");
+
+        assert_eq!(results.len(), 4);
+
+        let lossless_rows: Vec<&IterationMetrics> = results
+            .iter()
+            .filter(|m| m.chain == CHAIN_LOSSLESS)
+            .collect();
+        let lossy_rows: Vec<&IterationMetrics> = results
+            .iter()
+            .filter(|m| m.chain == CHAIN_LOSSY)
+            .collect();
+
+        assert_eq!(lossless_rows.len(), 2);
+        assert_eq!(lossy_rows.len(), 2);
+
+        for row in lossless_rows {
+            assert_eq!(
+                row.snr_db,
+                f64::INFINITY,
+                "Expected WAV <-> FLAC SNR to be inf, got {}",
+                row.snr_db
+            );
+            assert!(
+                row.lsd_full_db < 1e-6,
+                "Expected WAV <-> FLAC lsd_full_db < 1e-6, got {}",
+                row.lsd_full_db
+            );
+        }
+
+        for row in lossy_rows {
+            assert!(
+                row.snr_db.is_finite(),
+                "Expected MP3 <-> Opus SNR to be finite, got {}",
+                row.snr_db
+            );
+            assert!(
+                row.lsd_highband_db > row.lsd_passband_db,
+                "Expected MP3 <-> Opus lsd_highband_db ({}) > lsd_passband_db ({})",
+                row.lsd_highband_db,
+                row.lsd_passband_db
+            );
+        }
+    }
+
+    #[test]
+    fn test_single_chain_selection() {
+        if verify_ffmpeg_installed().is_err() {
+            return;
+        }
+
+        let reference = generate_synthetic_test_signal(0.5, 48_000);
+        let lossless_only = TranscodeConfig {
+            chain: ChainSelection::Lossless,
+            iterations: 1,
+            mp3_kbps: 192,
+            opus_kbps: 128,
+            max_lag_frames: 512,
+            keep_temp: None,
+            source_label: "synthetic_lossless.wav".to_string(),
+        };
+        let res_lossless = run_benchmark_chains(None, &reference, &lossless_only)
+            .expect("Lossless-only run should succeed");
+        assert_eq!(res_lossless.len(), 1);
+        assert_eq!(res_lossless[0].chain, CHAIN_LOSSLESS);
+
+        let lossy_only = TranscodeConfig {
+            chain: ChainSelection::Lossy,
+            iterations: 1,
+            mp3_kbps: 192,
+            opus_kbps: 128,
+            max_lag_frames: 512,
+            keep_temp: None,
+            source_label: "synthetic_lossy.wav".to_string(),
+        };
+        let res_lossy = run_benchmark_chains(None, &reference, &lossy_only)
+            .expect("Lossy-only run should succeed");
+        assert_eq!(res_lossy.len(), 1);
+        assert_eq!(res_lossy[0].chain, CHAIN_LOSSY);
+    }
+}

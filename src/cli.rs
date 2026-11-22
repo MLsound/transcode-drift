@@ -61,3 +61,34 @@ pub struct CliArgs {
     pub keep_temp: Option<PathBuf>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_chain_selection_parsing() {
+        let default_args =
+            CliArgs::try_parse_from(["codec-degradation"]).expect("default CLI args should parse");
+        assert_eq!(default_args.chain, ChainSelection::Both);
+
+        let lossless_args =
+            CliArgs::try_parse_from(["codec-degradation", "--chain", "lossless"])
+                .expect("--chain lossless should parse");
+        assert_eq!(lossless_args.chain, ChainSelection::Lossless);
+
+        let wav_flac_alias =
+            CliArgs::try_parse_from(["codec-degradation", "--chain", "wav-flac"])
+                .expect("--chain wav-flac alias should parse");
+        assert_eq!(wav_flac_alias.chain, ChainSelection::Lossless);
+
+        let lossy_args = CliArgs::try_parse_from(["codec-degradation", "--chain", "lossy"])
+            .expect("--chain lossy should parse");
+        assert_eq!(lossy_args.chain, ChainSelection::Lossy);
+
+        let mp3_opus_alias =
+            CliArgs::try_parse_from(["codec-degradation", "--chain", "mp3-opus"])
+                .expect("--chain mp3-opus alias should parse");
+        assert_eq!(mp3_opus_alias.chain, ChainSelection::Lossy);
+    }
+}
+

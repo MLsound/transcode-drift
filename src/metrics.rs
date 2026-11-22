@@ -369,3 +369,121 @@ pub fn evaluate_iteration_metrics(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::generate_synthetic_test_signal;
+
+    #[test]
+    fn test_bit_exact_identity() {
+        let signal = generate_synthetic_test_signal(1.0, 48_000);
+        let metrics = evaluate_iteration_metrics(
+            "WAV <-> FLAC",
+            1,
+            &signal.samples,
+            &signal.samples,
+            signal.channels,
+            signal.sample_rate,
+            2048,
+        );
+
+        assert_eq!(metrics.lag_frames, 0);
+        assert_eq!(metrics.snr_db, f64::INFINITY);
+        assert_eq!(metrics.nsr_db, f64::NEG_INFINITY);
+        assert_eq!(metrics.nsr_linear, 0.0);
+        assert!(
+            metrics.lsd_full_db < 1e-9,
+            "Expected lsd_full_db < 1e-9, got {}",
+            metrics.lsd_full_db
+        );
+        assert!(
+            metrics.lsd_passband_db < 1e-9,
+            "Expected lsd_passband_db < 1e-9, got {}",
+            metrics.lsd_passband_db
+        );
+        assert!(
+            metrics.lsd_highband_db < 1e-9,
+            "Expected lsd_highband_db < 1e-9, got {}",
+            metrics.lsd_highband_db
+        );
+    }
+
+    #[test]
+    fn test_priming_delay_recovery() {
+        let signal = generate_synthetic_test_signal(1.0, 48_000);
+        let shift_frames = 43usize;
+        let shift_samples = shift_frames * signal.channels;
+
+        // Prepend 43 stereo frames (86 samples) of priming zeros.
+        let mut shifted = vec![0.0_f64; shift_samples];
+        shifted.extend_from_slice(&signal.samples);
+
+        let best_lag =
+            find_best_frame_lag(&signal.samples, &shifted, signal.channels, 2048);
+        assert_eq!(best_lag, 43);
+
+        let (r_aligned, d_aligned) =
+            align_signals(&signal.samples, &shifted, signal.channels, best_lag);
+        let td = compute_time_domain_metrics(r_aligned, d_aligned);
+        assert!(
+            td.snr_db > 100.0,
+            "Expected recovered SNR > 100 dB, got {}",
+            td.snr_db
+        );
+    }
+
+    #[test]
+    fn test_band_limited_spectral_isolation() {
+        let sample_rate = 48_000u32;
+        let channels = 2usize;
+        let duration = 1.0_f64;
+        let frames = (duration * f64::from(sample_rate)) as usize;
+
+        let mut reference = Vec::with_capacity(frames * channels);
+        let mut highband_attenuated = Vec::with_capacity(frames * channels);
+
+        // Build a broadband multi-tone signal spanning 100 Hz to 19.8 kHz.
+        let tones: Vec<f64> = (1..=99).map(|k| f64::from(k) * 200.0).collect();
+
+        for n in 0..frames {
+            let t = (n as f64) / f64::from(sample_rate);
+            let mut ref_l = 0.0_f64;
+            let mut ref_r = 0.0_f64;
+            let mut deg_l = 0.0_f64;
+            let mut deg_r = 0.0_f64;
+
+            for (idx, &freq) in tones.iter().enumerate() {
+                let phase = (idx as f64) * 0.23;
+                let s_l = 0.02 * (2.0 * PI * freq * t + phase).sin();
+                let s_r = 0.02 * (2.0 * PI * freq * t + phase + 0.4).cos();
+
+                ref_l += s_l;
+                ref_r += s_r;
+
+                // Attenuate frequencies above 16.5 kHz by -40 dB (factor 0.01).
+                let gain = if freq > 16_500.0 { 0.01 } else { 1.0 };
+                deg_l += gain * s_l;
+                deg_r += gain * s_r;
+            }
+
+            reference.push(ref_l);
+            reference.push(ref_r);
+            highband_attenuated.push(deg_l);
+            highband_attenuated.push(deg_r);
+        }
+
+        let spectral =
+            compute_spectral_metrics(&reference, &highband_attenuated, channels, sample_rate);
+
+        assert!(
+            spectral.lsd_highband_db > 15.0,
+            "Expected lsd_highband_db > 15.0, got {}",
+            spectral.lsd_highband_db
+        );
+        assert!(
+            spectral.lsd_passband_db < 0.5,
+            "Expected lsd_passband_db < 0.5, got {}",
+            spectral.lsd_passband_db
+        );
+    }
+}

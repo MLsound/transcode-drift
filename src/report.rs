@@ -362,3 +362,148 @@ pub fn trigger_history_plot(csv_path: &Path, plot_path: &Path) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_compute_average_metrics() {
+        let rec1 = FileBatchRecord {
+            file_name: "a.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            num_frames: 48_000,
+            elapsed_secs: 1.0,
+            metrics: vec![IterationMetrics {
+                chain: "MP3 <-> Opus".to_string(),
+                iteration: 1,
+                lag_frames: 10,
+                snr_db: 20.0,
+                nsr_db: -20.0,
+                nsr_linear: 0.01,
+                lsd_full_db: 4.0,
+                lsd_passband_db: 2.0,
+                lsd_highband_db: 10.0,
+            }],
+        };
+        let rec2 = FileBatchRecord {
+            file_name: "b.wav".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            num_frames: 48_000,
+            elapsed_secs: 2.0,
+            metrics: vec![IterationMetrics {
+                chain: "MP3 <-> Opus".to_string(),
+                iteration: 1,
+                lag_frames: 20,
+                snr_db: 10.0,
+                nsr_db: -10.0,
+                nsr_linear: 0.03,
+                lsd_full_db: 6.0,
+                lsd_passband_db: 4.0,
+                lsd_highband_db: 14.0,
+            }],
+        };
+
+        let avg = compute_average_metrics(&[rec1, rec2]);
+        assert_eq!(avg.len(), 1);
+        assert_eq!(avg[0].lag_frames, 15);
+        assert!((avg[0].snr_db - 15.0).abs() < 1e-9);
+        assert!((avg[0].lsd_full_db - 5.0).abs() < 1e-9);
+        assert!((avg[0].lsd_passband_db - 3.0).abs() < 1e-9);
+        assert!((avg[0].lsd_highband_db - 12.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_visualization_smoke() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir for plot test");
+        let csv_path = temp_dir.path().join("test_report.csv");
+        let png_path = temp_dir.path().join("test_history.png");
+
+        let sample_rows = vec![
+            IterationMetrics {
+                chain: "WAV <-> FLAC".to_string(),
+                iteration: 1,
+                lag_frames: 0,
+                snr_db: f64::INFINITY,
+                nsr_db: f64::NEG_INFINITY,
+                nsr_linear: 0.0,
+                lsd_full_db: 0.0,
+                lsd_passband_db: 0.0,
+                lsd_highband_db: 0.0,
+            },
+            IterationMetrics {
+                chain: "WAV <-> FLAC".to_string(),
+                iteration: 2,
+                lag_frames: 0,
+                snr_db: f64::INFINITY,
+                nsr_db: f64::NEG_INFINITY,
+                nsr_linear: 0.0,
+                lsd_full_db: 0.0,
+                lsd_passband_db: 0.0,
+                lsd_highband_db: 0.0,
+            },
+            IterationMetrics {
+                chain: "MP3 <-> Opus".to_string(),
+                iteration: 1,
+                lag_frames: 155,
+                snr_db: 21.45,
+                nsr_db: -21.45,
+                nsr_linear: 0.007161,
+                lsd_full_db: 6.82,
+                lsd_passband_db: 1.94,
+                lsd_highband_db: 16.40,
+            },
+            IterationMetrics {
+                chain: "MP3 <-> Opus".to_string(),
+                iteration: 2,
+                lag_frames: 310,
+                snr_db: 18.12,
+                nsr_db: -18.12,
+                nsr_linear: 0.015417,
+                lsd_full_db: 8.15,
+                lsd_passband_db: 2.65,
+                lsd_highband_db: 19.25,
+            },
+        ];
+
+        write_csv_report(&csv_path, &sample_rows).expect("Failed to write sample CSV");
+        let csv_contents = fs::read_to_string(&csv_path).expect("Failed to read written CSV");
+        assert!(csv_contents.contains(",inf,-inf,0.0,"));
+
+        let python_bin = if Path::new(".venv/bin/python3").exists() {
+            ".venv/bin/python3"
+        } else {
+            "python3"
+        };
+
+        // Check if required python packages are installed before asserting PNG output.
+        let check = Command::new(python_bin)
+            .args(["-c", "import matplotlib, numpy, pandas"])
+            .output();
+        match check {
+            Ok(out) if out.status.success() => {}
+            _ => {
+                eprintln!(
+                    "Skipping Python visualization execution in cargo test because matplotlib/numpy/pandas are not installed in '{}'.",
+                    python_bin
+                );
+                return;
+            }
+        }
+
+        let status = Command::new(python_bin)
+            .arg("scripts/plot_history.py")
+            .arg("--csv")
+            .arg(&csv_path)
+            .arg("--out")
+            .arg(&png_path)
+            .status()
+            .expect("Failed to execute scripts/plot_history.py");
+
+        assert!(status.success(), "plot_history.py exited with non-zero status");
+        let meta = fs::metadata(&png_path).expect("Expected output PNG file to exist");
+        assert!(meta.len() > 0, "Expected non-empty PNG output file");
+    }
+}

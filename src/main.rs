@@ -245,3 +245,35 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::write_wav_16bit;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_discover_wav_files_and_confirmation_parsing() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory for batch test");
+        let signal = generate_synthetic_test_signal(0.1, 48_000);
+
+        let wav_b = temp_dir.path().join("track_b.WAV");
+        let wav_a = temp_dir.path().join("track_a.wav");
+        let non_wav = temp_dir.path().join("notes.txt");
+
+        write_wav_16bit(&wav_b, &signal).expect("Failed to write track_b.WAV");
+        write_wav_16bit(&wav_a, &signal).expect("Failed to write track_a.wav");
+        fs::write(&non_wav, b"ignored file").expect("Failed to write notes.txt");
+
+        let discovered =
+            discover_wav_files(temp_dir.path()).expect("Directory discovery should succeed");
+        assert_eq!(discovered.len(), 2);
+        assert_eq!(discovered[0], wav_a);
+        assert_eq!(discovered[1], wav_b);
+
+        assert!(is_affirmative_confirmation("y\n"));
+        assert!(is_affirmative_confirmation("YES"));
+        assert!(!is_affirmative_confirmation("n"));
+        assert!(!is_affirmative_confirmation(""));
+    }
+}
+
