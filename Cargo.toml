@@ -1,0 +1,13 @@
+[package]
+name = "codec-degradation"
+version = "0.1.0"
+edition = "2021"
+description = "CLI benchmark and visualization suite for iterative audio codec degradation"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+hound = "3.5"
+rustfft = "6.2"
+tempfile = "3.10"

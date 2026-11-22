@@ -1,0 +1,11 @@
+/target
+.venv/
+__pycache__/
+*.pyc
+*.csv
+*.png
+*.wav
+*.flac
+*.mp3
+*.opus
+.DS_Store
